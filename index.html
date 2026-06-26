@@ -747,14 +747,36 @@ footer{border-top:1px solid var(--line);padding:56px 6% 28px;text-align:center;}
   </div>
 </div>
 
-<script src="cloudinary.js"></script>
-<script src="api.js"></script>
+<!-- cloudinary.js and api.js logic is consolidated in the inline script below -->
 <script>
 /* =====================================================
    VESTRA — Configuration
 ===================================================== */
 const ADMIN_PASSWORD = "yassin01022950178#";
 const WHATSAPP_NUMBER = "201022950178";
+
+/* ── Cloudinary ─────────────────────────────────── */
+const CLOUD_NAME    = "dp8ipvgmc";
+const UPLOAD_PRESET = "UrSwMghhwXODb83QZQtTXfgbzSI";
+const CLOUDINARY_URL = `https://api.cloudinary.com/v1_1/${CLOUD_NAME}/image/upload`;
+
+async function uploadImageToCloudinary(file) {
+  if (!file || !file.type.startsWith("image/")) {
+    throw new Error("uploadImageToCloudinary: argument must be an image File.");
+  }
+  const formData = new FormData();
+  formData.append("file", file);
+  formData.append("upload_preset", UPLOAD_PRESET);
+  const response = await fetch(CLOUDINARY_URL, { method: "POST", body: formData });
+  if (!response.ok) {
+    let detail = "";
+    try { const err = await response.json(); detail = err?.error?.message ? ` — ${err.error.message}` : ""; } catch (_) {}
+    throw new Error(`Cloudinary upload failed (${response.status})${detail}`);
+  }
+  const data = await response.json();
+  if (!data.secure_url) throw new Error("Cloudinary response did not include a secure_url.");
+  return data.secure_url;
+}
 
 const PAYMENT_INFO = {
   vodafone:{
