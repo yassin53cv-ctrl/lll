@@ -747,6 +747,8 @@ footer{border-top:1px solid var(--line);padding:56px 6% 28px;text-align:center;}
   </div>
 </div>
 
+<script src="cloudinary.js"></script>
+<script src="api.js"></script>
 <script>
 /* =====================================================
    VESTRA — Configuration
@@ -1242,7 +1244,8 @@ document.getElementById('addProductBtn').addEventListener('click', () => openPro
 /* =====================================================
    ADMIN — IMAGE UPLOAD (drag-drop + file picker)
 ===================================================== */
-let _pendingImgDataUrl = null; // holds base64 of uploaded image
+let _pendingFile       = null;  // the raw File object waiting to be uploaded
+let _pendingImgUrl     = null;  // final URL: either a new Cloudinary URL or the existing product URL
 
 function setupImageUpload() {
   const dropZone = document.getElementById('imgDropZone');
@@ -1252,14 +1255,13 @@ function setupImageUpload() {
 
   function loadFile(file) {
     if (!file || !file.type.startsWith('image/')) { showToast('Please select an image file'); return; }
-    const reader = new FileReader();
-    reader.onload = e => {
-      _pendingImgDataUrl = e.target.result;
-      preview.src = _pendingImgDataUrl;
-      previewWrap.style.display = 'block';
-      dropZone.style.display = 'none';
-    };
-    reader.readAsDataURL(file);
+    _pendingFile = file;          // store File for later Cloudinary upload
+    _pendingImgUrl = null;        // clear any previously-saved URL — upload will set this
+    // Show a local object-URL preview immediately (no base64 needed)
+    const localPreviewUrl = URL.createObjectURL(file);
+    preview.src = localPreviewUrl;
+    previewWrap.style.display = 'block';
+    dropZone.style.display = 'none';
   }
 
   fileInput.addEventListener('change', e => { if (e.target.files[0]) loadFile(e.target.files[0]); });
@@ -1272,7 +1274,7 @@ function setupImageUpload() {
   });
 
   document.getElementById('removeImgBtn').addEventListener('click', () => {
-    _pendingImgDataUrl = null; preview.src = '';
+    _pendingFile = null; _pendingImgUrl = null; preview.src = '';
     previewWrap.style.display = 'none'; dropZone.style.display = 'block';
     fileInput.value = '';
   });
@@ -1280,7 +1282,8 @@ function setupImageUpload() {
 setupImageUpload();
 
 function resetImageUpload() {
-  _pendingImgDataUrl = null;
+  _pendingFile = null;
+  _pendingImgUrl = null;
   const preview = document.getElementById('imgPreview');
   preview.src = '';
   document.getElementById('imgPreviewWrap').style.display = 'none';
@@ -1304,9 +1307,10 @@ function openProductModal(id) {
     document.getElementById('prodDesc').value = p.desc || '';
     document.getElementById('prodPrice').value = p.price;
     document.getElementById('prodDiscount').value = p.discount || 0;
-    // If existing image, show it in preview
+    // If existing image URL (Cloudinary), show it in preview
     if (p.img) {
-      _pendingImgDataUrl = p.img;
+      _pendingImgUrl = p.img;         // remember the existing URL
+      _pendingFile   = null;          // no new file chosen yet
       document.getElementById('imgPreview').src = p.img;
       document.getElementById('imgPreviewWrap').style.display = 'block';
       document.getElementById('imgDropZone').style.display = 'none';
@@ -1323,23 +1327,31 @@ function openProductModal(id) {
 }
 
 document.getElementById('saveProductBtn').addEventListener('click', async () => {
-  const idVal = document.getElementById('prodId').value;
-  const name = document.getElementById('prodName').value.trim();
-  const cat = document.getElementById('prodCat').value.trim();
-  const desc = document.getElementById('prodDesc').value.trim();
-  const price = parseFloat(document.getElementById('prodPrice').value) || 0;
+  const idVal    = document.getElementById('prodId').value;
+  const name     = document.getElementById('prodName').value.trim();
+  const cat      = document.getElementById('prodCat').value.trim();
+  const desc     = document.getElementById('prodDesc').value.trim();
+  const price    = parseFloat(document.getElementById('prodPrice').value) || 0;
   const discount = Math.min(100, Math.max(0, parseFloat(document.getElementById('prodDiscount').value) || 0));
-  const img = _pendingImgDataUrl;
 
-  if (!name) { showToast('Product name is required'); return; }
-  if (!img) { showToast('Please add a product image'); return; }
+  if (!name)   { showToast('Product name is required'); return; }
+  if (!_pendingFile && !_pendingImgUrl) { showToast('Please add a product image'); return; }
   if (price <= 0) { showToast('Enter a valid price'); return; }
 
   const saveBtn = document.getElementById('saveProductBtn');
   saveBtn.disabled = true;
-  saveBtn.textContent = 'Saving…';
+  saveBtn.textContent = 'Uploading image…';
 
   try {
+    // If a new file was chosen, upload it to Cloudinary first
+    if (_pendingFile) {
+      _pendingImgUrl = await uploadImageToCloudinary(_pendingFile);
+    }
+
+    const img = _pendingImgUrl;   // guaranteed to be a Cloudinary secure_url
+
+    saveBtn.textContent = 'Saving…';
+
     if (idVal) {
       await dbUpdate({ id: parseInt(idVal), name, cat, desc, img, price, discount });
       showToast('Product updated');
@@ -1351,7 +1363,8 @@ document.getElementById('saveProductBtn').addEventListener('click', async () => 
     renderAdminGrid();
     renderProducts();
   } catch (err) {
-    // Error already logged and toasted inside dbCreate/dbUpdate
+    showToast('Error: ' + (err.message || 'Something went wrong'));
+    console.error(err);
   } finally {
     saveBtn.disabled = false;
     saveBtn.textContent = 'Save Product';
