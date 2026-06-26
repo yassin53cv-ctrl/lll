@@ -747,7 +747,6 @@ footer{border-top:1px solid var(--line);padding:56px 6% 28px;text-align:center;}
   </div>
 </div>
 
-<script src="api.js"></script>
 <script>
 /* =====================================================
    VESTRA — Configuration
@@ -779,32 +778,131 @@ const PAYMENT_INFO = {
 };
 
 /* =====================================================
-   DATA LAYER
-   — JSONBin (api.js) is the single source of truth.
-   — `productsCache` is only a render-time snapshot of the
-     last loadProducts() result, kept in sync after every
-     add/update/delete so synchronous UI code (cart math,
-     checkout summary) doesn't need to refetch mid-render.
-     It is never written to directly — every mutation goes
-     through addProduct() / updateProduct() / deleteProduct()
-     in api.js, followed by a fresh loadProducts() call.
+   JSONBIN CONFIG
 ===================================================== */
+const BIN_ID  = "6a3defedda38895dfe00b5f6";
+const API_KEY = "$2a$10$FoNOKxVnZzAjrsZmByPJN.d7ecOY7va6zniXhQ.HGGWOFdlq0kES6";
+const JSONBIN_URL = `https://api.jsonbin.io/v3/b/${BIN_ID}`;
+const JSONBIN_HEADERS = {
+  "Content-Type": "application/json",
+  "X-Master-Key": API_KEY,
+  "X-Bin-Versioning": "false"
+};
 
-/** Latest snapshot of JSONBin's products array. */
-let productsCache = [];
+/* =====================================================
+   DEFAULT PRODUCTS (used to seed an empty bin)
+===================================================== */
+const DEFAULT_PRODUCTS = [
+  {id:1,name:"Wool Tailored Overcoat",cat:"Outerwear",desc:"Hand-finished in a double-faced wool blend. A silhouette built to last.",img:"https://images.unsplash.com/photo-1539533018447-63fcce2678e3?q=80&w=900&auto=format&fit=crop",price:8200,discount:15},
+  {id:2,name:"Silk Evening Shirt",cat:"Tailoring",desc:"Pure silk, woven in Portugal. Cut for a clean, composed drape.",img:"https://images.unsplash.com/photo-1602810318383-e386cc2a3ccf?q=80&w=900&auto=format&fit=crop",price:3400,discount:0},
+  {id:3,name:"Cashmere Turtleneck",cat:"Knitwear",desc:"Mongolian cashmere, 12-gauge knit. Soft enough to wear against bare skin.",img:"https://images.unsplash.com/photo-1620799140408-edc6dcb6d633?q=80&w=900&auto=format&fit=crop",price:4600,discount:10},
+  {id:4,name:"Leather Crossbody",cat:"Accessories",desc:"Full-grain vegetable-tanned leather. Ages into something personal.",img:"https://images.unsplash.com/photo-1547949003-9792a18a2645?q=80&w=900&auto=format&fit=crop",price:5200,discount:0},
+  {id:5,name:"Pleated Wide Trousers",cat:"Tailoring",desc:"Wide-leg, high-rise. A silhouette borrowed from the finest Italian tailoring.",img:"https://images.unsplash.com/photo-1594633312681-425c7b97ccd1?q=80&w=900&auto=format&fit=crop",price:2900,discount:0},
+  {id:6,name:"Structured Blazer",cat:"Outerwear",desc:"A canvas-front construction that holds its shape — season after season.",img:"https://images.unsplash.com/photo-1591047139829-d91aecb6caea?q=80&w=900&auto=format&fit=crop",price:7100,discount:20},
+  {id:7,name:"Minimal Leather Belt",cat:"Accessories",desc:"Single-piece calfskin, blind-stitched edges. No logo, just craft.",img:"https://images.unsplash.com/photo-1624222247344-550fb60583dc?q=80&w=900&auto=format&fit=crop",price:1450,discount:0},
+  {id:8,name:"Merino Crewneck",cat:"Knitwear",desc:"Extra-fine merino from New Zealand. Layers invisibly, stands alone beautifully.",img:"https://images.unsplash.com/photo-1638503587600-c01a3c2c8b2e?q=80&w=900&auto=format&fit=crop",price:2600,discount:0}
+];
 
-/**
- * Pulls the latest products from JSONBin and re-renders
- * the storefront grid (and the admin grid, if it's open).
- * Call this after every successful add/update/delete.
- */
-async function refreshProducts() {
-  productsCache = await loadProducts();
-  renderProducts();
-  if (document.getElementById('adminModal').classList.contains('show')) {
-    renderAdminGrid();
+/* =====================================================
+   DATA LAYER — async, JSONBin-backed
+   _cache mirrors the remote bin so synchronous reads
+   (cart, checkout, etc.) always have data available.
+===================================================== */
+let _cache = { products: [], _nextId: 9 };
+
+async function _fetchBin() {
+  const res = await fetch(JSONBIN_URL, { method: "GET", headers: JSONBIN_HEADERS });
+  if (!res.ok) {
+    const txt = await res.text().catch(() => res.statusText);
+    throw new Error(`JSONBin GET ${res.status}: ${txt}`);
   }
-  return productsCache;
+  const json = await res.json();
+  return json.record;
+}
+
+async function _writeBin(record) {
+  const res = await fetch(JSONBIN_URL, {
+    method: "PUT",
+    headers: JSONBIN_HEADERS,
+    body: JSON.stringify(record)
+  });
+  if (!res.ok) {
+    const txt = await res.text().catch(() => res.statusText);
+    throw new Error(`JSONBin PUT ${res.status}: ${txt}`);
+  }
+}
+
+/** Returns cached products synchronously (for cart, checkout, etc.) */
+function dbRead() {
+  return _cache.products.slice();
+}
+
+/** Initialise: load from JSONBin, seed defaults if empty, then render. */
+async function dbInit() {
+  try {
+    const record = await _fetchBin();
+    // Seed with defaults if bin is empty
+    if (!record.products || record.products.length === 0) {
+      console.log("VESTRA: Bin is empty — seeding with default products.");
+      _cache = { products: DEFAULT_PRODUCTS, _nextId: 9 };
+      await _writeBin(_cache);
+    } else {
+      _cache.products = record.products;
+      _cache._nextId  = record._nextId || (Math.max(...record.products.map(p => p.id)) + 1);
+    }
+    console.log(`VESTRA: Loaded ${_cache.products.length} products from JSONBin.`);
+  } catch (err) {
+    console.error("VESTRA: JSONBin init failed — falling back to defaults.", err);
+    _cache = { products: DEFAULT_PRODUCTS.slice(), _nextId: 9 };
+  }
+  renderProducts();
+}
+
+/** CREATE */
+async function dbCreate(data) {
+  try {
+    const record = await _fetchBin();
+    const product = { id: record._nextId++, ...data };
+    record.products.push(product);
+    _cache = record;
+    await _writeBin(record);
+    return product;
+  } catch (err) {
+    console.error("VESTRA dbCreate error:", err);
+    showToast("Save failed: " + err.message);
+    throw err;
+  }
+}
+
+/** UPDATE */
+async function dbUpdate(data) {
+  try {
+    const record = await _fetchBin();
+    const idx = record.products.findIndex(p => p.id === data.id);
+    if (idx === -1) throw new Error(`Product id ${data.id} not found`);
+    record.products[idx] = { ...record.products[idx], ...data };
+    _cache = record;
+    await _writeBin(record);
+    return record.products[idx];
+  } catch (err) {
+    console.error("VESTRA dbUpdate error:", err);
+    showToast("Save failed: " + err.message);
+    throw err;
+  }
+}
+
+/** DELETE */
+async function dbDelete(id) {
+  try {
+    const record = await _fetchBin();
+    record.products = record.products.filter(p => p.id !== id);
+    _cache = record;
+    await _writeBin(record);
+  } catch (err) {
+    console.error("VESTRA dbDelete error:", err);
+    showToast("Delete failed: " + err.message);
+    throw err;
+  }
 }
 
 /* =====================================================
@@ -882,7 +980,7 @@ document.querySelectorAll('.modal-overlay').forEach(ov => {
 ===================================================== */
 function renderProducts() {
   const grid = document.getElementById('productGrid');
-  const products = productsCache;
+  const products = dbRead();
   grid.innerHTML = '';
   products.forEach(p => {
     const fp = finalPrice(p);
@@ -909,15 +1007,7 @@ function renderProducts() {
   });
   observeReveals();
 }
-/* Initial load — JSONBin is the source of truth on every page load. */
-(async function initProducts() {
-  try {
-    await refreshProducts();
-  } catch (err) {
-    console.error('Failed to load products from JSONBin:', err);
-    showToast('Could not load products. Check your connection.');
-  }
-})();
+dbInit(); // loads from JSONBin, then calls renderProducts()
 
 /* =====================================================
    CART
@@ -934,7 +1024,7 @@ function updateBagCount() {
 }
 function cartTotal() {
   return cart.reduce((s, c) => {
-    const p = productsCache.find(x => x.id === c.id); return p ? s + finalPrice(p) * c.qty : s;
+    const p = dbRead().find(x => x.id === c.id); return p ? s + finalPrice(p) * c.qty : s;
   }, 0);
 }
 function renderCart() {
@@ -947,7 +1037,7 @@ function renderCart() {
   }
   body.innerHTML = '';
   cart.forEach(c => {
-    const p = productsCache.find(x => x.id === c.id); if (!p) return;
+    const p = dbRead().find(x => x.id === c.id); if (!p) return;
     const fp = finalPrice(p);
     const div = document.createElement('div');
     div.className = 'cart-item';
@@ -1033,7 +1123,7 @@ function openCheckout() {
   const listEl = document.getElementById('checkoutSummaryList');
   let html = '';
   cart.forEach(c => {
-    const p = productsCache.find(x => x.id === c.id); if (!p) return;
+    const p = dbRead().find(x => x.id === c.id); if (!p) return;
     const fp = finalPrice(p);
     html += `<div class="cks-item">
       <img src="${p.img}" alt="${p.name}">
@@ -1077,7 +1167,7 @@ document.getElementById('checkoutForm').addEventListener('submit', function(e) {
   document.getElementById('checkoutErr').style.display = 'none';
   let lines = '';
   cart.forEach(c => {
-    const p = productsCache.find(x => x.id === c.id); if (!p) return;
+    const p = dbRead().find(x => x.id === c.id); if (!p) return;
     lines += `- ${p.name} x${c.qty} (${formatPrice(finalPrice(p) * c.qty)} EGP)\n`;
   });
   const payLabel = PAYMENT_INFO[selectedPayMethod].label;
@@ -1112,25 +1202,13 @@ function attemptLogin() {
 /* =====================================================
    ADMIN — PANEL RENDER (card grid)
 ===================================================== */
-async function openAdminPanel() {
-  openModal('adminModal');
-  const grid = document.getElementById('adminGrid');
-  grid.innerHTML = '<div class="admin-empty">Loading products…</div>';
-  try {
-    // Admin panel always reads directly from JSONBin, never a stale cache.
-    productsCache = await loadProducts();
-  } catch (err) {
-    console.error('Failed to load products from JSONBin:', err);
-    grid.innerHTML = '<div class="admin-empty">Could not load products from JSONBin.</div>';
-    showToast('Could not load products. Check your connection.');
-    return;
-  }
-  renderAdminGrid();
+function openAdminPanel() {
+  renderAdminGrid(); openModal('adminModal');
 }
 
 function renderAdminGrid() {
   const grid = document.getElementById('adminGrid');
-  const products = productsCache;
+  const products = dbRead();
   if (products.length === 0) {
     grid.innerHTML = '<div class="admin-empty">No products yet. Add your first one.</div>'; return;
   }
@@ -1156,7 +1234,7 @@ function renderAdminGrid() {
     grid.appendChild(card);
   });
   grid.querySelectorAll('.edit-btn').forEach(b => b.addEventListener('click', () => openProductModal(parseInt(b.dataset.id))));
-  grid.querySelectorAll('.del-btn').forEach(b => b.addEventListener('click', () => confirmDeleteProduct(parseInt(b.dataset.id))));
+  grid.querySelectorAll('.del-btn').forEach(b => b.addEventListener('click', () => deleteProduct(parseInt(b.dataset.id))));
 }
 
 document.getElementById('addProductBtn').addEventListener('click', () => openProductModal(null));
@@ -1219,7 +1297,7 @@ function openProductModal(id) {
   resetImageUpload();
 
   if (isEdit) {
-    const p = productsCache.find(x => x.id === id);
+    const p = dbRead().find(x => x.id === id);
     document.getElementById('prodId').value = p.id;
     document.getElementById('prodName').value = p.name;
     document.getElementById('prodCat').value = p.cat;
@@ -1259,40 +1337,36 @@ document.getElementById('saveProductBtn').addEventListener('click', async () => 
 
   const saveBtn = document.getElementById('saveProductBtn');
   saveBtn.disabled = true;
-  const originalLabel = saveBtn.textContent;
   saveBtn.textContent = 'Saving…';
 
   try {
     if (idVal) {
-      // PUT the merged product straight to JSONBin.
-      await updateProduct({ id: parseInt(idVal), name, cat, desc, img, price, discount });
+      await dbUpdate({ id: parseInt(idVal), name, cat, desc, img, price, discount });
       showToast('Product updated');
     } else {
-      await addProduct({ name, cat, desc, img, price, discount });
+      await dbCreate({ name, cat, desc, img, price, discount });
       showToast('Product added');
     }
-
     closeModal('productModal');
-    // Reload from JSONBin so the UI always reflects what's actually saved.
-    await refreshProducts();
+    renderAdminGrid();
+    renderProducts();
   } catch (err) {
-    console.error('Failed to save product to JSONBin:', err);
-    showToast('Could not save product. Check your connection.');
+    // Error already logged and toasted inside dbCreate/dbUpdate
   } finally {
     saveBtn.disabled = false;
-    saveBtn.textContent = originalLabel;
+    saveBtn.textContent = 'Save Product';
   }
 });
 
-async function confirmDeleteProduct(id) {
+async function deleteProduct(id) {
   if (!confirm('Delete this product? This cannot be undone.')) return;
   try {
-    await deleteProduct(id);
-    await refreshProducts();
+    await dbDelete(id);
+    renderAdminGrid();
+    renderProducts();
     showToast('Product deleted');
   } catch (err) {
-    console.error('Failed to delete product from JSONBin:', err);
-    showToast('Could not delete product. Check your connection.');
+    // Error already logged and toasted inside dbDelete
   }
 }
 </script>
